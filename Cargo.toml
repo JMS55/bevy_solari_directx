@@ -1,0 +1,14 @@
+[package]
+name = "bevy_solari_directx"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.14.0-rc.2", default-features = false, features = [
+    "bevy_winit",
+] }
+windows = { version = "0.57", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+] }
