@@ -9,11 +9,12 @@ use windows::{
     core::Interface,
     Win32::{
         Foundation::{HANDLE, HWND},
-        Graphics::Dxgi::{
-            Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
-            IDXGIFactory2, IDXGISwapChain4, DXGI_SWAP_CHAIN_DESC1,
-            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        Graphics::{
+            Direct3D12::*,
+            Dxgi::{
+                Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+                *,
+            },
         },
         System::Threading::WaitForMultipleObjectsEx,
     },
@@ -21,12 +22,15 @@ use windows::{
 
 // TODO: Frame pacing, HDR/WCG support, VRR support?
 
-pub const FRAMES_IN_FLIGHT: u32 = 1;
+pub const FRAMES_IN_FLIGHT: usize = 2;
 
 #[derive(Component)]
 pub struct WindowRenderTarget {
     swapchain: IDXGISwapChain4,
     wait_object: HANDLE,
+    rtv_heap: ID3D12DescriptorHeap,
+    rtvs: Option<[ID3D12Resource; FRAMES_IN_FLIGHT]>,
+    rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; FRAMES_IN_FLIGHT]>,
 }
 
 pub fn wait_for_ready_swapchains(windows: Query<&WindowRenderTarget>) {
@@ -36,6 +40,8 @@ pub fn wait_for_ready_swapchains(windows: Query<&WindowRenderTarget>) {
         .collect::<SmallVec<[HANDLE; 2]>>();
 
     unsafe { WaitForMultipleObjectsEx(&wait_objects, true, 1000, true) };
+
+    // TODO: Wait for fence?
 }
 
 pub fn update_swapchains(
@@ -72,14 +78,14 @@ pub fn update_swapchains(
                 ..Default::default()
             },
             BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, // TODO
-            BufferCount: FRAMES_IN_FLIGHT,
+            BufferCount: FRAMES_IN_FLIGHT as u32,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
             AlphaMode: DXGI_ALPHA_MODE_IGNORE,
             Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, // TODO: VRR support
             ..Default::default()
         };
 
-        if let Some(render_target) = render_target {
+        if let Some(mut render_target) = render_target {
             // Skip resizing swapchain if unchanged
             let mut old_swapchain_desc = Default::default();
             unsafe { render_target.swapchain.GetDesc1(&mut old_swapchain_desc) }.unwrap();
@@ -88,6 +94,10 @@ pub fn update_swapchains(
             }
 
             // TODO: Wait for idle swapchain
+
+            // Drop old RTVs
+            render_target.rtvs = None;
+            render_target.rtv_handles = None;
 
             // Resize swapchain
             unsafe {
@@ -100,12 +110,21 @@ pub fn update_swapchains(
                 )
             }
             .unwrap();
+
+            // Recreate RTVs
+            let (rtvs, rtv_handles) = create_rtvs(
+                &gpu.device,
+                &render_target.swapchain,
+                &render_target.rtv_heap,
+            );
+            render_target.rtvs = Some(rtvs);
+            render_target.rtv_handles = Some(rtv_handles);
         } else {
             // Create new swapchain
             let factory = gpu.factory.cast::<IDXGIFactory2>().unwrap();
             let swapchain = unsafe {
                 factory.CreateSwapChainForHwnd(
-                    &gpu.device,
+                    &gpu.queue,
                     get_hwnd(window_handle),
                     &swapchain_desc,
                     None,
@@ -122,20 +141,60 @@ pub fn update_swapchains(
             new_wait_objects.push(wait_object);
 
             // Setup RTVs
-            // TODO
+            let rtv_heap = unsafe {
+                gpu.device
+                    .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                        Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                        NumDescriptors: FRAMES_IN_FLIGHT as u32,
+                        ..Default::default()
+                    })
+            }
+            .unwrap();
+            let (rtvs, rtv_handles) = create_rtvs(&gpu.device, &swapchain, &rtv_heap);
 
             // Add a WindowRenderTarget component to the window entity
             commands.entity(entity).insert(WindowRenderTarget {
                 swapchain,
                 wait_object,
+                rtv_heap,
+                rtvs: Some(rtvs),
+                rtv_handles: Some(rtv_handles),
             });
         }
     }
 
-    // Wait for new swapchains to be ready
+    // Wait for any new swapchains to be ready
     if !new_wait_objects.is_empty() {
         unsafe { WaitForMultipleObjectsEx(&new_wait_objects, true, 1000, true) };
     }
+}
+
+fn create_rtvs(
+    device: &ID3D12Device9,
+    swapchain: &IDXGISwapChain4,
+    rtv_heap: &ID3D12DescriptorHeap,
+) -> (
+    [ID3D12Resource; FRAMES_IN_FLIGHT],
+    [D3D12_CPU_DESCRIPTOR_HANDLE; FRAMES_IN_FLIGHT],
+) {
+    let mut rtvs = SmallVec::with_capacity(FRAMES_IN_FLIGHT);
+    let mut handles = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); FRAMES_IN_FLIGHT];
+
+    let heap_increment =
+        unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) } as usize;
+    let mut handle = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+
+    for i in 0..FRAMES_IN_FLIGHT {
+        let rtv = unsafe { swapchain.GetBuffer::<ID3D12Resource>(i as u32) }.unwrap();
+        unsafe { device.CreateRenderTargetView(&rtv, None, handle) };
+
+        rtvs.push(rtv);
+        handles[i] = handle;
+
+        handle.ptr += heap_increment;
+    }
+
+    (rtvs.into_inner().unwrap(), handles)
 }
 
 fn get_hwnd(window_handle: &RawHandleWrapperHolder) -> HWND {

@@ -1,4 +1,3 @@
-use crate::swapchain::FRAMES_IN_FLIGHT;
 use bevy::prelude::{error, info, warn, Resource};
 use core::ffi::c_void;
 use std::{backtrace::Backtrace, ptr, sync::Mutex};
@@ -20,7 +19,6 @@ pub struct Gpu {
     pub device: ID3D12Device9,
     pub queue: ID3D12CommandQueue,
     pub command_allocator: Mutex<ID3D12CommandAllocator>,
-    pub rtv_descriptors: ID3D12DescriptorHeap,
 }
 
 impl Gpu {
@@ -72,21 +70,11 @@ impl Gpu {
         let command_allocator =
             Mutex::new(device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?);
 
-        // Descriptor heaps
-        let rtv_descriptors = device
-            .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-                NumDescriptors: FRAMES_IN_FLIGHT,
-                ..Default::default()
-            })
-            .unwrap();
-
         Ok(Self {
             factory,
             device,
             queue,
             command_allocator,
-            rtv_descriptors,
         })
     }
 }
