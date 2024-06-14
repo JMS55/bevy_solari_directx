@@ -1,24 +1,31 @@
 mod gpu;
+mod swapchain;
 
+use crate::gpu::Gpu;
+use crate::swapchain::update_swapchains;
+use crate::swapchain::wait_for_ready_swapchains;
 use bevy::{
-    app::{Plugin, Startup},
-    prelude::{App, Commands, Query, With},
-    window::{PrimaryWindow, RawHandleWrapperHolder},
+    app::{First, Last, MainScheduleOrder, Plugin},
+    ecs::schedule::ScheduleLabel,
+    prelude::App,
 };
-use gpu::Gpu;
 
 pub struct BevySolariPlugin;
 
 impl Plugin for BevySolariPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_renderer);
+        app.init_schedule(Render);
+        app.world_mut()
+            .resource_mut::<MainScheduleOrder>()
+            .insert_after(Last, Render);
+
+        let gpu = unsafe { Gpu::new() }.expect("BevySolari: Failed to initialize renderer");
+
+        app.insert_resource(gpu)
+            .add_systems(First, wait_for_ready_swapchains) // TODO: Should probably be it's own schedule before First
+            .add_systems(Render, update_swapchains);
     }
 }
 
-fn setup_renderer(
-    window: Query<&RawHandleWrapperHolder, With<PrimaryWindow>>,
-    mut commands: Commands,
-) {
-    let window = window.single();
-    commands.insert_resource(unsafe { Gpu::new() }.expect("Failed to initialize renderer"));
-}
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+struct Render;

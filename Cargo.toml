@@ -7,8 +7,12 @@ edition = "2021"
 bevy = { version = "0.14.0-rc.2", default-features = false, features = [
     "bevy_winit",
 ] }
-windows = { version = "0.57", features = [
+windows = { version = "0.54", features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Threading",
 ] }
+raw-window-handle = "0.6"
+smallvec = "1"
