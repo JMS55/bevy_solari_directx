@@ -20,19 +20,25 @@ use windows::{
     },
 };
 
-// TODO: Frame pacing, HDR/WCG support, VRR support?
+// TODO: Reflex-like frame pacing, HDR/WCG support, VRR support?
 
-pub const FRAMES_IN_FLIGHT: usize = 2;
+pub const SWAPCHAIN_BUFFER_COUNT: usize = 2;
 
 #[derive(Component)]
 pub struct WindowRenderTarget {
     swapchain: IDXGISwapChain4,
     wait_object: HANDLE,
     rtv_heap: ID3D12DescriptorHeap,
-    rtvs: Option<[ID3D12Resource; FRAMES_IN_FLIGHT]>,
-    rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; FRAMES_IN_FLIGHT]>,
+    rtvs: Option<[ID3D12Resource; SWAPCHAIN_BUFFER_COUNT]>,
+    rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT]>,
 }
 
+/// Delays starting the main schedule until all swapchains estimate there is 1 frame's worth of time left
+/// before they are able to accept a new frame, reducing overall frame latency.
+///
+/// It's better to block here, before we read user inputs, update game state, and record rendering commands, rather
+/// than blocking at the end of the frame waiting for the swapchain to become available. This minimizes the latency
+/// between reading user inputs, and submitting the rendered frame to the swapchain.
 pub fn wait_for_ready_swapchains(windows: Query<&WindowRenderTarget>) {
     let wait_objects = windows
         .iter()
@@ -41,9 +47,10 @@ pub fn wait_for_ready_swapchains(windows: Query<&WindowRenderTarget>) {
 
     unsafe { WaitForMultipleObjectsEx(&wait_objects, true, 1000, true) };
 
-    // TODO: Wait for fence?
+    // TODO: Wait for fences
 }
 
+/// Create or update swapchains for new or changed windows.
 pub fn update_swapchains(
     mut windows: Query<(
         Entity,
@@ -78,95 +85,118 @@ pub fn update_swapchains(
                 ..Default::default()
             },
             BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, // TODO
-            BufferCount: FRAMES_IN_FLIGHT as u32,
+            BufferCount: SWAPCHAIN_BUFFER_COUNT as u32,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
             AlphaMode: DXGI_ALPHA_MODE_IGNORE,
             Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, // TODO: VRR support
             ..Default::default()
         };
 
+        // If there's an existing swapchain, resize if needed, else create a new swapchain
         if let Some(mut render_target) = render_target {
-            // Skip resizing swapchain if unchanged
-            let mut old_swapchain_desc = Default::default();
-            unsafe { render_target.swapchain.GetDesc1(&mut old_swapchain_desc) }.unwrap();
-            if swapchain_desc == old_swapchain_desc {
-                continue;
-            }
-
-            // TODO: Wait for idle swapchain
-
-            // Drop old RTVs
-            render_target.rtvs = None;
-            render_target.rtv_handles = None;
-
-            // Resize swapchain
-            unsafe {
-                render_target.swapchain.ResizeBuffers(
-                    swapchain_desc.BufferCount,
-                    swapchain_desc.Width,
-                    swapchain_desc.Height,
-                    swapchain_desc.Format,
-                    swapchain_desc.Flags,
-                )
-            }
-            .unwrap();
-
-            // Recreate RTVs
-            let (rtvs, rtv_handles) = create_rtvs(
-                &gpu.device,
-                &render_target.swapchain,
-                &render_target.rtv_heap,
-            );
-            render_target.rtvs = Some(rtvs);
-            render_target.rtv_handles = Some(rtv_handles);
+            resize_swapchain_if_needed(&mut render_target, swapchain_desc, &gpu);
         } else {
-            // Create new swapchain
-            let factory = gpu.factory.cast::<IDXGIFactory2>().unwrap();
-            let swapchain = unsafe {
-                factory.CreateSwapChainForHwnd(
-                    &gpu.queue,
-                    get_hwnd(window_handle),
-                    &swapchain_desc,
-                    None,
-                    None,
-                )
-            }
-            .unwrap()
-            .cast::<IDXGISwapChain4>()
-            .unwrap();
-
-            // Setup frame latency
-            unsafe { swapchain.SetMaximumFrameLatency(1).unwrap() };
-            let wait_object = unsafe { swapchain.GetFrameLatencyWaitableObject() };
-            new_wait_objects.push(wait_object);
-
-            // Setup RTVs
-            let rtv_heap = unsafe {
-                gpu.device
-                    .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                        Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-                        NumDescriptors: FRAMES_IN_FLIGHT as u32,
-                        ..Default::default()
-                    })
-            }
-            .unwrap();
-            let (rtvs, rtv_handles) = create_rtvs(&gpu.device, &swapchain, &rtv_heap);
-
-            // Add a WindowRenderTarget component to the window entity
-            commands.entity(entity).insert(WindowRenderTarget {
-                swapchain,
-                wait_object,
-                rtv_heap,
-                rtvs: Some(rtvs),
-                rtv_handles: Some(rtv_handles),
-            });
+            commands.entity(entity).insert(create_new_swapchain(
+                &gpu,
+                window_handle,
+                swapchain_desc,
+                &mut new_wait_objects,
+            ));
         }
     }
 
-    // Wait for any new swapchains to be ready
+    // Wait for any newly created swapchains to be ready
     if !new_wait_objects.is_empty() {
         unsafe { WaitForMultipleObjectsEx(&new_wait_objects, true, 1000, true) };
     }
+}
+
+fn create_new_swapchain(
+    gpu: &Gpu,
+    window_handle: &RawHandleWrapperHolder,
+    swapchain_desc: DXGI_SWAP_CHAIN_DESC1,
+    new_wait_objects: &mut SmallVec<[HANDLE; 2]>,
+) -> WindowRenderTarget {
+    // Create new swapchain
+    let factory = gpu.factory.cast::<IDXGIFactory2>().unwrap();
+    let swapchain = unsafe {
+        factory.CreateSwapChainForHwnd(
+            &gpu.queue,
+            get_hwnd(window_handle),
+            &swapchain_desc,
+            None,
+            None,
+        )
+    }
+    .unwrap()
+    .cast::<IDXGISwapChain4>()
+    .unwrap();
+
+    // Setup frame latency
+    unsafe { swapchain.SetMaximumFrameLatency(1).unwrap() };
+    let wait_object = unsafe { swapchain.GetFrameLatencyWaitableObject() };
+    new_wait_objects.push(wait_object);
+
+    // Setup RTVs
+    let rtv_heap = unsafe {
+        gpu.device
+            .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                NumDescriptors: SWAPCHAIN_BUFFER_COUNT as u32,
+                ..Default::default()
+            })
+    }
+    .unwrap();
+    let (rtvs, rtv_handles) = create_rtvs(&gpu.device, &swapchain, &rtv_heap);
+
+    // Wrap into a component
+    WindowRenderTarget {
+        swapchain,
+        wait_object,
+        rtv_heap,
+        rtvs: Some(rtvs),
+        rtv_handles: Some(rtv_handles),
+    }
+}
+
+fn resize_swapchain_if_needed(
+    render_target: &mut WindowRenderTarget,
+    swapchain_desc: DXGI_SWAP_CHAIN_DESC1,
+    gpu: &Gpu,
+) {
+    // Skip resizing swapchain if unchanged
+    let mut old_swapchain_desc = Default::default();
+    unsafe { render_target.swapchain.GetDesc1(&mut old_swapchain_desc) }.unwrap();
+    if swapchain_desc == old_swapchain_desc {
+        return;
+    }
+
+    // TODO: Wait for idle swapchain via fences
+
+    // Drop old RTVs
+    render_target.rtvs = None;
+    render_target.rtv_handles = None;
+
+    // Resize swapchain
+    unsafe {
+        render_target.swapchain.ResizeBuffers(
+            swapchain_desc.BufferCount,
+            swapchain_desc.Width,
+            swapchain_desc.Height,
+            swapchain_desc.Format,
+            swapchain_desc.Flags,
+        )
+    }
+    .unwrap();
+
+    // Recreate RTVs
+    let (rtvs, rtv_handles) = create_rtvs(
+        &gpu.device,
+        &render_target.swapchain,
+        &render_target.rtv_heap,
+    );
+    render_target.rtvs = Some(rtvs);
+    render_target.rtv_handles = Some(rtv_handles);
 }
 
 fn create_rtvs(
@@ -174,17 +204,17 @@ fn create_rtvs(
     swapchain: &IDXGISwapChain4,
     rtv_heap: &ID3D12DescriptorHeap,
 ) -> (
-    [ID3D12Resource; FRAMES_IN_FLIGHT],
-    [D3D12_CPU_DESCRIPTOR_HANDLE; FRAMES_IN_FLIGHT],
+    [ID3D12Resource; SWAPCHAIN_BUFFER_COUNT],
+    [D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT],
 ) {
-    let mut rtvs = SmallVec::with_capacity(FRAMES_IN_FLIGHT);
-    let mut handles = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); FRAMES_IN_FLIGHT];
+    let mut rtvs = SmallVec::with_capacity(SWAPCHAIN_BUFFER_COUNT);
+    let mut handles = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); SWAPCHAIN_BUFFER_COUNT];
 
     let heap_increment =
         unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) } as usize;
     let mut handle = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
 
-    for i in 0..FRAMES_IN_FLIGHT {
+    for i in 0..SWAPCHAIN_BUFFER_COUNT {
         let rtv = unsafe { swapchain.GetBuffer::<ID3D12Resource>(i as u32) }.unwrap();
         unsafe { device.CreateRenderTargetView(&rtv, None, handle) };
 

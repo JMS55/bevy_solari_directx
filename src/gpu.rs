@@ -13,6 +13,7 @@ use windows::{
     },
 };
 
+/// Central interface for managing GPU resources and rendering work.
 #[derive(Resource)]
 pub struct Gpu {
     pub factory: IDXGIFactory7,
