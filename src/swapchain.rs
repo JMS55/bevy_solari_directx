@@ -98,9 +98,8 @@ pub fn update_swapchains(
     if let Some(mut render_target) = render_target {
         resize_swapchain_if_needed(&mut render_target, swapchain_desc, &gpu);
     } else {
-        commands
-            .entity(entity)
-            .insert(create_new_swapchain(&gpu, window_handle, swapchain_desc));
+        let render_target = create_new_swapchain(&gpu, window_handle, swapchain_desc);
+        commands.entity(entity).insert(render_target);
     }
 }
 
