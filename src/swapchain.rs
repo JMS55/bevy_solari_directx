@@ -1,7 +1,7 @@
 use crate::gpu::Gpu;
 use bevy::{
-    prelude::{Commands, Component, Entity, Query, Res},
-    window::{RawHandleWrapperHolder, Window, WindowMode},
+    prelude::{Commands, Component, Entity, Query, Res, With},
+    window::{PrimaryWindow, RawHandleWrapperHolder, Window, WindowMode},
 };
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
@@ -16,14 +16,15 @@ use windows::{
                 *,
             },
         },
-        System::Threading::WaitForMultipleObjectsEx,
+        System::Threading::WaitForSingleObjectEx,
     },
 };
 
-// TODO: Reflex-like frame pacing, HDR/WCG support, VRR support?
+// TODO: Reflex-like frame pacing, HDR/WCG support, VRR support
 
-pub const SWAPCHAIN_BUFFER_COUNT: usize = 2;
+const SWAPCHAIN_BUFFER_COUNT: usize = 2;
 
+/// Stores a swapchain and other objects necessary for rendering to a [`Window`].
 #[derive(Component)]
 pub struct WindowRenderTarget {
     swapchain: IDXGISwapChain4,
@@ -33,81 +34,73 @@ pub struct WindowRenderTarget {
     rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT]>,
 }
 
-/// Delays starting the main schedule until all swapchains estimate there is 1 frame's worth of time left
-/// before they are able to accept a new frame, reducing overall frame latency.
+/// Delay starting the main schedule until the swapchain estimates there is 1 frame's worth of time left
+/// before it is able to accept a new frame, reducing overall frame latency.
 ///
 /// It's better to block here, before we read user inputs, update game state, and record rendering commands, rather
 /// than blocking at the end of the frame waiting for the swapchain to become available. This minimizes the latency
 /// between reading user inputs, and submitting the rendered frame to the swapchain.
-pub fn wait_for_ready_swapchains(windows: Query<&WindowRenderTarget>) {
-    let wait_objects = windows
-        .iter()
-        .map(|window| window.wait_object)
-        .collect::<SmallVec<[HANDLE; 2]>>();
+pub fn wait_for_ready_swapchains(window: Query<&WindowRenderTarget, With<PrimaryWindow>>) {
+    if let Ok(render_target) = window.get_single() {
+        unsafe { WaitForSingleObjectEx(render_target.wait_object, 1000, true) };
 
-    unsafe { WaitForMultipleObjectsEx(&wait_objects, true, 1000, true) };
-
-    // TODO: Wait for fences
+        // TODO: Wait for fence
+    }
 }
 
-/// Create or update swapchains for new or changed windows.
+/// Create or update the swapchain for a newly created or changed window.
 pub fn update_swapchains(
-    mut windows: Query<(
-        Entity,
-        &Window,
-        &RawHandleWrapperHolder,
-        Option<&mut WindowRenderTarget>,
-    )>,
+    mut window: Query<
+        (
+            Entity,
+            &Window,
+            &RawHandleWrapperHolder,
+            Option<&mut WindowRenderTarget>,
+        ),
+        With<PrimaryWindow>,
+    >,
     mut commands: Commands,
     gpu: Res<Gpu>,
 ) {
-    let mut new_wait_objects = SmallVec::<[HANDLE; 2]>::new();
+    let Ok((entity, window, window_handle, render_target)) = window.get_single_mut() else {
+        return;
+    };
 
-    for (entity, window, window_handle, render_target) in &mut windows {
-        // Check for unsupported window modes
-        if !matches!(
-            window.mode,
-            WindowMode::Windowed | WindowMode::BorderlessFullscreen
-        ) {
-            panic!(
-                "BevySolari: WindowMode must be Windowed or BorderlessFullscreen, was {:?}",
-                window.mode
-            );
-        }
-
-        // Setup swapchain descriptor
-        let swapchain_desc = DXGI_SWAP_CHAIN_DESC1 {
-            Width: window.physical_width(),
-            Height: window.physical_height(),
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM, // TODO
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                ..Default::default()
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, // TODO
-            BufferCount: SWAPCHAIN_BUFFER_COUNT as u32,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, // TODO: VRR support
-            ..Default::default()
-        };
-
-        // If there's an existing swapchain, resize if needed, else create a new swapchain
-        if let Some(mut render_target) = render_target {
-            resize_swapchain_if_needed(&mut render_target, swapchain_desc, &gpu);
-        } else {
-            commands.entity(entity).insert(create_new_swapchain(
-                &gpu,
-                window_handle,
-                swapchain_desc,
-                &mut new_wait_objects,
-            ));
-        }
+    // Check for unsupported window modes
+    if !matches!(
+        window.mode,
+        WindowMode::Windowed | WindowMode::BorderlessFullscreen
+    ) {
+        panic!(
+            "BevySolari: WindowMode must be Windowed or BorderlessFullscreen, was {:?}",
+            window.mode
+        );
     }
 
-    // Wait for any newly created swapchains to be ready
-    if !new_wait_objects.is_empty() {
-        unsafe { WaitForMultipleObjectsEx(&new_wait_objects, true, 1000, true) };
+    // Setup swapchain descriptor
+    let swapchain_desc = DXGI_SWAP_CHAIN_DESC1 {
+        Width: window.physical_width(),
+        Height: window.physical_height(),
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM, // TODO
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            ..Default::default()
+        },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, // TODO
+        BufferCount: SWAPCHAIN_BUFFER_COUNT as u32,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+        Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, // TODO: VRR support
+        ..Default::default()
+    };
+
+    // If there's an existing swapchain, resize if needed, else create a new swapchain
+    if let Some(mut render_target) = render_target {
+        resize_swapchain_if_needed(&mut render_target, swapchain_desc, &gpu);
+    } else {
+        commands
+            .entity(entity)
+            .insert(create_new_swapchain(&gpu, window_handle, swapchain_desc));
     }
 }
 
@@ -115,7 +108,6 @@ fn create_new_swapchain(
     gpu: &Gpu,
     window_handle: &RawHandleWrapperHolder,
     swapchain_desc: DXGI_SWAP_CHAIN_DESC1,
-    new_wait_objects: &mut SmallVec<[HANDLE; 2]>,
 ) -> WindowRenderTarget {
     // Create new swapchain
     let factory = gpu.factory.cast::<IDXGIFactory2>().unwrap();
@@ -135,7 +127,7 @@ fn create_new_swapchain(
     // Setup frame latency
     unsafe { swapchain.SetMaximumFrameLatency(1).unwrap() };
     let wait_object = unsafe { swapchain.GetFrameLatencyWaitableObject() };
-    new_wait_objects.push(wait_object);
+    unsafe { WaitForSingleObjectEx(wait_object, 1000, true) };
 
     // Setup RTVs
     let rtv_heap = unsafe {
