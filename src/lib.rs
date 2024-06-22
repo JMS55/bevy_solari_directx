@@ -9,7 +9,7 @@ use bevy::{
 
 pub use crate::{
     gpu::Gpu,
-    swapchain::{update_swapchains, wait_for_ready_swapchains, WindowRenderTarget},
+    swapchain::{update_swapchain, wait_for_ready_swapchain, WindowRenderTarget},
 };
 pub use windows;
 
@@ -25,8 +25,8 @@ impl Plugin for BevyDirectXPlugin {
         let gpu = Gpu::new().expect("BevyDirectX: Failed to initialize renderer");
 
         app.insert_resource(gpu)
-            .add_systems(First, wait_for_ready_swapchains) // TODO: Should probably be it's own schedule before First
-            .add_systems(Render, update_swapchains);
+            .add_systems(First, wait_for_ready_swapchain) // TODO: Should probably be it's own schedule before First
+            .add_systems(Render, update_swapchain);
     }
 }
 

@@ -4,7 +4,7 @@ use bevy::{
     DefaultPlugins,
 };
 use bevy_directx::{
-    update_swapchains,
+    update_swapchain,
     windows::Win32::Graphics::{
         Direct3D::*,
         Direct3D12::*,
@@ -18,7 +18,7 @@ fn main() {
     App::new()
         .add_plugins((DefaultPlugins, BevyDirectXPlugin))
         .add_systems(Startup, setup_pipeline)
-        .add_systems(Render, render_frame.after(update_swapchains))
+        .add_systems(Render, render_frame.after(update_swapchain))
         .run();
 }
 

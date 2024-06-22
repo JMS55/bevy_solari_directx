@@ -54,7 +54,7 @@ impl WindowRenderTarget {
 /// It's better to block here, before we read user inputs, update game state, and record rendering commands, rather
 /// than blocking at the end of the frame waiting for the swapchain to become available. This minimizes the latency
 /// between reading user inputs, and submitting the rendered frame to the swapchain.
-pub fn wait_for_ready_swapchains(
+pub fn wait_for_ready_swapchain(
     window: Query<&WindowRenderTarget, With<PrimaryWindow>>,
     gpu: Res<Gpu>,
 ) {
@@ -66,7 +66,7 @@ pub fn wait_for_ready_swapchains(
 }
 
 /// Create or update the swapchain for a newly created or changed window.
-pub fn update_swapchains(
+pub fn update_swapchain(
     mut window: Query<
         (
             Entity,
@@ -179,7 +179,7 @@ fn resize_swapchain_if_needed(
         return;
     }
 
-    // GPU should be idle since we waited on the fence in wait_for_ready_swapchains(),
+    // GPU should be idle since we waited on the fence in wait_for_ready_swapchain(),
     // so it's safe to resize the swapchain
 
     // Drop old RTVs
