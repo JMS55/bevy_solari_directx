@@ -5,13 +5,13 @@ use std::{
     ptr, slice, str,
 };
 use windows::{
-    core::{Error, Interface, PCSTR},
+    core::{Error, Interface, PCSTR, PWSTR},
     Win32::Graphics::{
         Direct3D::D3D_FEATURE_LEVEL_12_2,
         Direct3D12::*,
         Dxgi::{
-            CreateDXGIFactory2, IDXGIAdapter4, IDXGIFactory7, DXGI_CREATE_FACTORY_DEBUG,
-            DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+            CreateDXGIFactory2, IDXGIAdapter4, IDXGIDevice, IDXGIFactory7,
+            DXGI_CREATE_FACTORY_DEBUG, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
         },
     },
 };
@@ -71,6 +71,30 @@ impl Gpu {
                     Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
                     ..Default::default()
                 })?;
+
+            // Log adapter info
+            let mut adapter_info = Default::default();
+            adapter.GetDesc3(&mut adapter_info)?;
+            let driver_version = adapter
+                .CheckInterfaceSupport(&IDXGIDevice::IID)?
+                .to_le_bytes();
+            info!(
+                "AdapterInfo {{ name: {}, driver: {}.{}.{}.{}, vendor: {}, device: {}, sub_sys: {}, revision: {}, video_ram: {:.2} GB, sys_ram: {:.2} GB, shared_ram: {:.2} GB }}",
+                PWSTR::from_raw(&mut adapter_info.Description as _).display(),
+                u16::from_le_bytes([driver_version[6], driver_version[7]]),
+                u16::from_le_bytes([driver_version[4], driver_version[5]]),
+                u16::from_le_bytes([driver_version[2], driver_version[3]]),
+                u16::from_le_bytes([driver_version[0], driver_version[1]]),
+                adapter_info.VendorId,
+                adapter_info.DeviceId,
+                adapter_info.SubSysId,
+                adapter_info.Revision,
+                adapter_info.DedicatedVideoMemory as f32 / 1_000_000_000.0,
+                adapter_info.DedicatedSystemMemory as f32 / 1_000_000_000.0,
+                adapter_info.SharedSystemMemory as f32 / 1_000_000_000.0,
+            );
+
+            // TODO: Log monitor info (resolution, min/max refresh rate, etc)
 
             Ok(Self {
                 factory,
