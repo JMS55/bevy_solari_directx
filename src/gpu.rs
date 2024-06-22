@@ -79,7 +79,7 @@ impl Gpu {
                 .CheckInterfaceSupport(&IDXGIDevice::IID)?
                 .to_le_bytes();
             info!(
-                "AdapterInfo {{ name: {}, driver: {}.{}.{}.{}, vendor: {}, device: {}, sub_sys: {}, revision: {}, video_ram: {:.2} GB, sys_ram: {:.2} GB, shared_ram: {:.2} GB }}",
+                "AdapterInfo {{ name: {}, driver: {}.{}.{}.{}, vendor: {}, device: {}, sub_sys: {}, revision: {}, video_ram: {} MB, sys_ram: {} MB, shared_ram: {} MB }}",
                 PWSTR::from_raw(&mut adapter_info.Description as _).display(),
                 u16::from_le_bytes([driver_version[6], driver_version[7]]),
                 u16::from_le_bytes([driver_version[4], driver_version[5]]),
@@ -89,9 +89,9 @@ impl Gpu {
                 adapter_info.DeviceId,
                 adapter_info.SubSysId,
                 adapter_info.Revision,
-                adapter_info.DedicatedVideoMemory as f32 / 1_000_000_000.0,
-                adapter_info.DedicatedSystemMemory as f32 / 1_000_000_000.0,
-                adapter_info.SharedSystemMemory as f32 / 1_000_000_000.0,
+                adapter_info.DedicatedVideoMemory / 1_000_000,
+                adapter_info.DedicatedSystemMemory / 1_000_000,
+                adapter_info.SharedSystemMemory / 1_000_000,
             );
 
             // TODO: Log monitor info (resolution, min/max refresh rate, etc)
