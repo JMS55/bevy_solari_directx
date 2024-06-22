@@ -6,13 +6,17 @@ use std::{
 };
 use windows::{
     core::{Error, Interface, PCSTR, PWSTR},
-    Win32::Graphics::{
-        Direct3D::D3D_FEATURE_LEVEL_12_2,
-        Direct3D12::*,
-        Dxgi::{
-            CreateDXGIFactory2, IDXGIAdapter4, IDXGIDevice, IDXGIFactory7,
-            DXGI_CREATE_FACTORY_DEBUG, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+    Win32::{
+        Foundation::HANDLE,
+        Graphics::{
+            Direct3D::D3D_FEATURE_LEVEL_12_2,
+            Direct3D12::*,
+            Dxgi::{
+                CreateDXGIFactory2, IDXGIAdapter4, IDXGIDevice, IDXGIFactory7,
+                DXGI_CREATE_FACTORY_DEBUG, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+            },
         },
+        System::Threading::{CreateEventW, WaitForSingleObjectEx, INFINITE},
     },
 };
 
@@ -22,6 +26,11 @@ pub struct Gpu {
     pub factory: IDXGIFactory7,
     pub device: ID3D12Device9,
     pub queue: ID3D12CommandQueue,
+    command_allocator: ID3D12CommandAllocator,
+    command_list: ID3D12GraphicsCommandList7,
+    fence: ID3D12Fence,
+    fence_event: HANDLE,
+    fence_counter: u64,
 }
 
 impl Gpu {
@@ -72,6 +81,21 @@ impl Gpu {
                     ..Default::default()
                 })?;
 
+            // Command allocator and list
+            let command_allocator =
+                device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
+            let command_list: ID3D12GraphicsCommandList7 = device.CreateCommandList(
+                0,
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                &command_allocator,
+                None,
+            )?;
+            command_list.Close()?;
+
+            // Fence
+            let fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
+            let fence_event = CreateEventW(None, false, false, None)?;
+
             // Log adapter info
             let mut adapter_info = Default::default();
             adapter.GetDesc3(&mut adapter_info)?;
@@ -94,14 +118,56 @@ impl Gpu {
                 adapter_info.SharedSystemMemory / 1_000_000,
             );
 
-            // TODO: Log monitor info (resolution, min/max refresh rate, etc)
-
             Ok(Self {
                 factory,
                 device,
                 queue,
+                command_allocator,
+                command_list,
+                fence,
+                fence_event,
+                fence_counter: 0,
             })
         }
+    }
+
+    pub fn reset_commands(
+        &self,
+        pipeline: Option<&ID3D12PipelineState>,
+    ) -> Result<&ID3D12GraphicsCommandList7, Error> {
+        unsafe {
+            self.command_allocator.Reset()?;
+            self.command_list.Reset(&self.command_allocator, pipeline)?;
+        }
+
+        Ok(&self.command_list)
+    }
+
+    pub fn signal_fence(&mut self) -> Result<(), Error> {
+        self.fence_counter += 1;
+
+        unsafe {
+            self.queue.Signal(&self.fence, self.fence_counter)?;
+            self.fence
+                .SetEventOnCompletion(self.fence_counter, self.fence_event)
+        }
+    }
+
+    pub fn wait_for_fence(&self) {
+        unsafe {
+            if self.fence.GetCompletedValue() < self.fence_counter {
+                WaitForSingleObjectEx(self.fence_event, INFINITE, true);
+            }
+        }
+    }
+
+    pub fn execute_command_list(&self) -> Result<(), Error> {
+        unsafe {
+            self.command_list.Close()?;
+            self.queue
+                .ExecuteCommandLists(&[Some(self.command_list.clone().into())]);
+        }
+        Ok(())
     }
 
     pub fn create_root_signature(

@@ -5,14 +5,10 @@ use bevy::{
 };
 use bevy_directx::{
     update_swapchains,
-    windows::Win32::{
-        Foundation::HANDLE,
-        Graphics::{
-            Direct3D::*,
-            Direct3D12::*,
-            Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC},
-        },
-        System::Threading::{CreateEventW, WaitForSingleObjectEx},
+    windows::Win32::Graphics::{
+        Direct3D::*,
+        Direct3D12::*,
+        Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC},
     },
     BevyDirectXPlugin, Gpu, Render, WindowRenderTarget,
 };
@@ -21,23 +17,18 @@ use std::mem::ManuallyDrop;
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, BevyDirectXPlugin))
-        .add_systems(Startup, setup_resources)
+        .add_systems(Startup, setup_pipeline)
         .add_systems(Render, render_frame.after(update_swapchains))
         .run();
 }
 
 #[derive(Resource)]
-struct DemoResources {
+struct Pipeline {
     root_signature: ID3D12RootSignature,
     pipeline: ID3D12PipelineState,
-    command_allocator: ID3D12CommandAllocator,
-    command_list: ID3D12GraphicsCommandList7,
-    fence: ID3D12Fence,
-    fence_event: HANDLE,
-    fence_counter: u64,
 }
 
-fn setup_resources(gpu: Res<Gpu>, mut commands: Commands) {
+fn setup_pipeline(gpu: Res<Gpu>, mut commands: Commands) {
     let shader_vs = include_bytes!("../assets/triangle_vs.dxil");
     let shader_ps = include_bytes!("../assets/triangle_ps.dxil");
 
@@ -47,54 +38,25 @@ fn setup_resources(gpu: Res<Gpu>, mut commands: Commands) {
     let pipeline_desc = pipeline_desc(root_signature.clone(), shader_vs, shader_ps);
     let pipeline = unsafe { gpu.device.CreateGraphicsPipelineState(&pipeline_desc) }.unwrap();
 
-    let command_allocator = unsafe {
-        gpu.device
-            .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
-    }
-    .unwrap();
-    let command_list = unsafe {
-        gpu.device.CreateCommandList(
-            0,
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
-            &command_allocator,
-            &pipeline,
-        )
-    }
-    .unwrap();
-
-    let fence = unsafe { gpu.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
-    let fence_event = unsafe { CreateEventW(None, false, false, None) }.unwrap();
-
-    commands.insert_resource(DemoResources {
+    commands.insert_resource(Pipeline {
         root_signature,
         pipeline,
-        command_allocator,
-        command_list,
-        fence,
-        fence_event,
-        fence_counter: 0,
     });
 }
 
 fn render_frame(
-    gpu: Res<Gpu>,
-    mut resources: ResMut<DemoResources>,
+    mut gpu: ResMut<Gpu>,
+    pipeline: Res<Pipeline>,
     render_target: Query<&WindowRenderTarget>,
 ) {
     let render_target = render_target.single();
     let (rtv, rtv_handle) = render_target.get_rtv();
 
     unsafe {
-        WaitForSingleObjectEx(resources.fence_event, 1000, true);
-
-        resources.command_allocator.Reset().unwrap();
-        let command_list = &resources.command_list;
-        command_list
-            .Reset(&resources.command_allocator, &resources.pipeline)
-            .unwrap();
+        let command_list = gpu.reset_commands(Some(&pipeline.pipeline)).unwrap();
 
         // TODO: Enhanced barriers
-        command_list.SetGraphicsRootSignature(&resources.root_signature);
+        command_list.SetGraphicsRootSignature(&pipeline.root_signature);
         command_list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
             Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -123,20 +85,10 @@ fn render_frame(
                 }),
             },
         }]);
-        command_list.Close().unwrap();
 
-        gpu.queue
-            .ExecuteCommandLists(&[Some(command_list.clone().into())]);
+        gpu.execute_command_list().unwrap();
         render_target.present();
-
-        gpu.queue
-            .Signal(&resources.fence, resources.fence_counter)
-            .unwrap();
-        resources.fence_counter += 1;
-        resources
-            .fence
-            .SetEventOnCompletion(resources.fence_counter, resources.fence_event)
-            .unwrap();
+        gpu.signal_fence().unwrap();
     }
 }
 

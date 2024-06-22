@@ -1,6 +1,6 @@
 use crate::gpu::Gpu;
 use bevy::{
-    prelude::{Commands, Component, Entity, Query, Res, With},
+    prelude::{Commands, Component, Entity, Query, Res, ResMut, With},
     window::{PrimaryWindow, RawHandleWrapperHolder, Window, WindowMode},
 };
 use raw_window_handle::RawWindowHandle;
@@ -16,7 +16,7 @@ use windows::{
                 *,
             },
         },
-        System::Threading::WaitForSingleObjectEx,
+        System::Threading::{WaitForSingleObjectEx, INFINITE},
     },
 };
 
@@ -54,11 +54,14 @@ impl WindowRenderTarget {
 /// It's better to block here, before we read user inputs, update game state, and record rendering commands, rather
 /// than blocking at the end of the frame waiting for the swapchain to become available. This minimizes the latency
 /// between reading user inputs, and submitting the rendered frame to the swapchain.
-pub fn wait_for_ready_swapchains(window: Query<&WindowRenderTarget, With<PrimaryWindow>>) {
+pub fn wait_for_ready_swapchains(
+    window: Query<&WindowRenderTarget, With<PrimaryWindow>>,
+    gpu: Res<Gpu>,
+) {
     if let Ok(render_target) = window.get_single() {
-        unsafe { WaitForSingleObjectEx(render_target.wait_object, 1000, true) };
+        unsafe { WaitForSingleObjectEx(render_target.wait_object, INFINITE, true) };
 
-        // TODO: Wait for fence
+        gpu.wait_for_fence();
     }
 }
 
@@ -74,7 +77,7 @@ pub fn update_swapchains(
         With<PrimaryWindow>,
     >,
     mut commands: Commands,
-    gpu: Res<Gpu>,
+    mut gpu: ResMut<Gpu>,
 ) {
     let Ok((entity, window, window_handle, render_target)) = window.get_single_mut() else {
         return;
@@ -110,7 +113,7 @@ pub fn update_swapchains(
 
     // If there's an existing swapchain, resize if needed, else create a new swapchain
     if let Some(mut render_target) = render_target {
-        resize_swapchain_if_needed(&mut render_target, swapchain_desc, &gpu);
+        resize_swapchain_if_needed(&mut render_target, swapchain_desc, &mut gpu);
     } else {
         let render_target = create_new_swapchain(&gpu, window_handle, swapchain_desc);
         commands.entity(entity).insert(render_target);
@@ -140,7 +143,7 @@ fn create_new_swapchain(
     // Setup frame latency
     unsafe { swapchain.SetMaximumFrameLatency(1).unwrap() };
     let wait_object = unsafe { swapchain.GetFrameLatencyWaitableObject() };
-    unsafe { WaitForSingleObjectEx(wait_object, 1000, true) };
+    unsafe { WaitForSingleObjectEx(wait_object, INFINITE, true) };
 
     // Setup RTVs
     let rtv_heap = unsafe {
@@ -167,7 +170,7 @@ fn create_new_swapchain(
 fn resize_swapchain_if_needed(
     render_target: &mut WindowRenderTarget,
     swapchain_desc: DXGI_SWAP_CHAIN_DESC1,
-    gpu: &Gpu,
+    gpu: &mut Gpu,
 ) {
     // Skip resizing swapchain if unchanged
     let mut old_swapchain_desc = Default::default();
@@ -176,7 +179,8 @@ fn resize_swapchain_if_needed(
         return;
     }
 
-    // TODO: Wait for idle swapchain via fences
+    // GPU should be idle since we waited on the fence in wait_for_ready_swapchains(),
+    // so it's safe to resize the swapchain
 
     // Drop old RTVs
     render_target.rtvs = None;
