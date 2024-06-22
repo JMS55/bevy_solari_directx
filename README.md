@@ -1,2 +1,2 @@
-# Bevy Solari DirectX
+# BevyDirectX
 TODO

@@ -34,6 +34,20 @@ pub struct WindowRenderTarget {
     rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT]>,
 }
 
+impl WindowRenderTarget {
+    pub fn get_rtv(&self) -> (ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
+        let i = unsafe { self.swapchain.GetCurrentBackBufferIndex() } as usize;
+        (
+            self.rtvs.as_ref().unwrap()[i].clone(),
+            self.rtv_handles.unwrap()[i],
+        )
+    }
+
+    pub fn present(&self) {
+        unsafe { self.swapchain.Present(1, 0) }.unwrap();
+    }
+}
+
 /// Delay starting the main schedule until the swapchain estimates there is 1 frame's worth of time left
 /// before it is able to accept a new frame, reducing overall frame latency.
 ///
@@ -72,7 +86,7 @@ pub fn update_swapchains(
         WindowMode::Windowed | WindowMode::BorderlessFullscreen
     ) {
         panic!(
-            "BevySolari: WindowMode must be Windowed or BorderlessFullscreen, was {:?}",
+            "BevyDirectX: WindowMode must be Windowed or BorderlessFullscreen, was {:?}",
             window.mode
         );
     }

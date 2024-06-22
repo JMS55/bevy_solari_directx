@@ -1,25 +1,28 @@
 mod gpu;
 mod swapchain;
 
-use crate::gpu::Gpu;
-use crate::swapchain::update_swapchains;
-use crate::swapchain::wait_for_ready_swapchains;
 use bevy::{
     app::{First, Last, MainScheduleOrder, Plugin},
     ecs::schedule::ScheduleLabel,
     prelude::App,
 };
 
-pub struct BevySolariPlugin;
+pub use crate::{
+    gpu::Gpu,
+    swapchain::{update_swapchains, wait_for_ready_swapchains, WindowRenderTarget},
+};
+pub use windows;
 
-impl Plugin for BevySolariPlugin {
+pub struct BevyDirectXPlugin;
+
+impl Plugin for BevyDirectXPlugin {
     fn build(&self, app: &mut App) {
         app.init_schedule(Render);
         app.world_mut()
             .resource_mut::<MainScheduleOrder>()
             .insert_after(Last, Render);
 
-        let gpu = unsafe { Gpu::new() }.expect("BevySolari: Failed to initialize renderer");
+        let gpu = Gpu::new().expect("BevyDirectX: Failed to initialize renderer");
 
         app.insert_resource(gpu)
             .add_systems(First, wait_for_ready_swapchains) // TODO: Should probably be it's own schedule before First
@@ -28,4 +31,4 @@ impl Plugin for BevySolariPlugin {
 }
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
-struct Render;
+pub struct Render;
