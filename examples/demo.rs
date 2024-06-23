@@ -6,9 +6,7 @@ use bevy::{
 use bevy_directx::{
     update_render_target,
     windows::Win32::Graphics::{
-        Direct3D::*,
-        Direct3D12::*,
-        Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC},
+        Direct3D::*, Direct3D12::*, Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM,
     },
     BevyDirectXPlugin, Gpu, Render, WindowRenderTarget,
 };
@@ -98,48 +96,28 @@ fn pipeline_desc(
     shader_vs: &[u8],
     shader_ps: &[u8],
 ) -> D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: unsafe { transmute_copy(root_signature) },
-
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: shader_vs.as_ptr() as _,
-            BytecodeLength: shader_vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: shader_ps.as_ptr() as _,
-            BytecodeLength: shader_ps.len(),
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: [D3D12_RENDER_TARGET_BLEND_DESC {
-                RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                ..Default::default()
-            }; 8],
-            ..Default::default()
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_BACK,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: [
-            DXGI_FORMAT_R8G8B8A8_UNORM,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-            DXGI_FORMAT_UNKNOWN,
-        ],
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            ..Default::default()
-        },
+    let mut desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC::default();
+    desc.pRootSignature = unsafe { transmute_copy(root_signature) };
+    desc.VS = D3D12_SHADER_BYTECODE {
+        pShaderBytecode: shader_vs.as_ptr() as _,
+        BytecodeLength: shader_vs.len(),
+    };
+    desc.PS = D3D12_SHADER_BYTECODE {
+        pShaderBytecode: shader_ps.as_ptr() as _,
+        BytecodeLength: shader_ps.len(),
+    };
+    desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
+    desc.SampleMask = u32::MAX;
+    desc.RasterizerState = D3D12_RASTERIZER_DESC {
+        FillMode: D3D12_FILL_MODE_SOLID,
+        CullMode: D3D12_CULL_MODE_BACK,
+        FrontCounterClockwise: true.into(),
+        DepthClipEnable: true.into(),
         ..Default::default()
-    }
+    };
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.NumRenderTargets = 1;
+    desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc
 }
