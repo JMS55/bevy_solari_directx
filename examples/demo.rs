@@ -4,7 +4,7 @@ use bevy::{
     DefaultPlugins,
 };
 use bevy_directx::{
-    update_swapchain,
+    update_render_target,
     windows::Win32::Graphics::{
         Direct3D::*,
         Direct3D12::*,
@@ -12,13 +12,13 @@ use bevy_directx::{
     },
     BevyDirectXPlugin, Gpu, Render, WindowRenderTarget,
 };
-use std::mem::ManuallyDrop;
+use std::mem::{transmute_copy, ManuallyDrop};
 
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, BevyDirectXPlugin))
         .add_systems(Startup, setup_pipeline)
-        .add_systems(Render, render_frame.after(update_swapchain))
+        .add_systems(Render, render_frame.after(update_render_target))
         .run();
 }
 
@@ -35,7 +35,7 @@ fn setup_pipeline(gpu: Res<Gpu>, mut commands: Commands) {
     let root_signature = gpu
         .create_root_signature(&[], &[], D3D12_ROOT_SIGNATURE_FLAG_NONE)
         .unwrap();
-    let pipeline_desc = pipeline_desc(root_signature.clone(), shader_vs, shader_ps);
+    let pipeline_desc = pipeline_desc(&root_signature, shader_vs, shader_ps);
     let pipeline = unsafe { gpu.device.CreateGraphicsPipelineState(&pipeline_desc) }.unwrap();
 
     commands.insert_resource(Pipeline {
@@ -49,12 +49,13 @@ fn render_frame(
     pipeline: Res<Pipeline>,
     render_target: Query<&WindowRenderTarget>,
 ) {
-    let render_target = render_target.single();
-    let (swapchain_texture, swapchain_rtv) = render_target.get_swapchain_rtv();
+    let Ok(render_target) = render_target.get_single() else {
+        return;
+    };
+    let (render_target_texture, render_target_rtv) = render_target.get_rtv();
 
+    let command_list = gpu.reset_commands(Some(&pipeline.pipeline)).unwrap();
     unsafe {
-        let command_list = gpu.reset_commands(Some(&pipeline.pipeline)).unwrap();
-
         // TODO: Enhanced barriers
         command_list.SetGraphicsRootSignature(&pipeline.root_signature);
         command_list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
@@ -62,15 +63,15 @@ fn render_frame(
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
             Anonymous: D3D12_RESOURCE_BARRIER_0 {
                 Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: ManuallyDrop::new(Some(swapchain_texture.clone())),
+                    pResource: transmute_copy(render_target_texture),
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     StateBefore: D3D12_RESOURCE_STATE_PRESENT,
                     StateAfter: D3D12_RESOURCE_STATE_RENDER_TARGET,
                 }),
             },
         }]);
-        command_list.OMSetRenderTargets(1, Some(&swapchain_rtv), false, None);
-        command_list.ClearRenderTargetView(swapchain_rtv, &[0.0, 0.0, 0.0, 1.0], None);
+        command_list.OMSetRenderTargets(1, Some(&render_target_rtv), false, None);
+        command_list.ClearRenderTargetView(render_target_rtv, &[0.0, 0.0, 0.0, 1.0], None);
         command_list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         command_list.DrawInstanced(3, 1, 0, 0);
         command_list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
@@ -78,27 +79,28 @@ fn render_frame(
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
             Anonymous: D3D12_RESOURCE_BARRIER_0 {
                 Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: ManuallyDrop::new(Some(swapchain_texture)),
+                    pResource: transmute_copy(render_target_texture),
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     StateBefore: D3D12_RESOURCE_STATE_RENDER_TARGET,
                     StateAfter: D3D12_RESOURCE_STATE_PRESENT,
                 }),
             },
         }]);
-
-        gpu.execute_command_list().unwrap();
-        render_target.present();
-        gpu.signal_fence().unwrap();
     }
+
+    gpu.execute_command_list().unwrap();
+    render_target.present();
+    gpu.signal_fence().unwrap();
 }
 
 fn pipeline_desc(
-    root_signature: ID3D12RootSignature,
+    root_signature: &ID3D12RootSignature,
     shader_vs: &[u8],
     shader_ps: &[u8],
 ) -> D3D12_GRAPHICS_PIPELINE_STATE_DESC {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: ManuallyDrop::new(Some(root_signature)),
+        pRootSignature: unsafe { transmute_copy(root_signature) },
+
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: shader_vs.as_ptr() as _,
             BytecodeLength: shader_vs.len(),

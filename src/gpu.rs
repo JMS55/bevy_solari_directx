@@ -78,6 +78,8 @@ impl Gpu {
                 }
             }
 
+            // TODO: DXGI debug layers
+
             // Queue
             let queue: ID3D12CommandQueue =
                 device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {

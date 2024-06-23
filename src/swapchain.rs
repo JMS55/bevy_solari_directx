@@ -35,12 +35,9 @@ pub struct WindowRenderTarget {
 }
 
 impl WindowRenderTarget {
-    pub fn get_swapchain_rtv(&self) -> (ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
+    pub fn get_rtv(&self) -> (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
         let i = unsafe { self.swapchain.GetCurrentBackBufferIndex() } as usize;
-        (
-            self.textures.as_ref().unwrap()[i].clone(),
-            self.rtvs.unwrap()[i],
-        )
+        (&self.textures.as_ref().unwrap()[i], self.rtvs.unwrap()[i])
     }
 
     pub fn present(&self) {
@@ -67,7 +64,7 @@ pub fn wait_for_ready_frame(
 }
 
 /// Create or update the swapchain for a newly created or changed window.
-pub fn update_swapchain(
+pub fn update_render_target(
     mut window: Query<
         (
             Entity,

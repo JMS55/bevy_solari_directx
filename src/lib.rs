@@ -9,7 +9,7 @@ use bevy::{
 
 pub use crate::{
     gpu::Gpu,
-    swapchain::{update_swapchain, wait_for_ready_frame, WindowRenderTarget},
+    swapchain::{update_render_target, wait_for_ready_frame, WindowRenderTarget},
 };
 pub use windows;
 
@@ -26,7 +26,7 @@ impl Plugin for BevyDirectXPlugin {
 
         app.insert_resource(gpu)
             .add_systems(First, wait_for_ready_frame) // TODO: Should probably be it's own schedule before First
-            .add_systems(Render, update_swapchain);
+            .add_systems(Render, update_render_target);
     }
 }
 
