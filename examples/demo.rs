@@ -50,7 +50,7 @@ fn render_frame(
     render_target: Query<&WindowRenderTarget>,
 ) {
     let render_target = render_target.single();
-    let (rtv, rtv_handle) = render_target.get_rtv();
+    let (swapchain_texture, swapchain_rtv) = render_target.get_swapchain_rtv();
 
     unsafe {
         let command_list = gpu.reset_commands(Some(&pipeline.pipeline)).unwrap();
@@ -62,15 +62,15 @@ fn render_frame(
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
             Anonymous: D3D12_RESOURCE_BARRIER_0 {
                 Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: ManuallyDrop::new(Some(rtv.clone())),
+                    pResource: ManuallyDrop::new(Some(swapchain_texture.clone())),
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     StateBefore: D3D12_RESOURCE_STATE_PRESENT,
                     StateAfter: D3D12_RESOURCE_STATE_RENDER_TARGET,
                 }),
             },
         }]);
-        command_list.OMSetRenderTargets(1, Some(&rtv_handle), false, None);
-        command_list.ClearRenderTargetView(rtv_handle, &[0.0, 0.0, 0.0, 1.0], None);
+        command_list.OMSetRenderTargets(1, Some(&swapchain_rtv), false, None);
+        command_list.ClearRenderTargetView(swapchain_rtv, &[0.0, 0.0, 0.0, 1.0], None);
         command_list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         command_list.DrawInstanced(3, 1, 0, 0);
         command_list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
@@ -78,7 +78,7 @@ fn render_frame(
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
             Anonymous: D3D12_RESOURCE_BARRIER_0 {
                 Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: ManuallyDrop::new(Some(rtv)),
+                    pResource: ManuallyDrop::new(Some(swapchain_texture)),
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     StateBefore: D3D12_RESOURCE_STATE_RENDER_TARGET,
                     StateAfter: D3D12_RESOURCE_STATE_PRESENT,

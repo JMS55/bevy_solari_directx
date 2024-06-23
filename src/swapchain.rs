@@ -30,16 +30,16 @@ pub struct WindowRenderTarget {
     swapchain: IDXGISwapChain4,
     wait_object: HANDLE,
     rtv_heap: ID3D12DescriptorHeap,
-    rtvs: Option<[ID3D12Resource; SWAPCHAIN_BUFFER_COUNT]>,
-    rtv_handles: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT]>,
+    textures: Option<[ID3D12Resource; SWAPCHAIN_BUFFER_COUNT]>,
+    rtvs: Option<[D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT]>,
 }
 
 impl WindowRenderTarget {
-    pub fn get_rtv(&self) -> (ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
+    pub fn get_swapchain_rtv(&self) -> (ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
         let i = unsafe { self.swapchain.GetCurrentBackBufferIndex() } as usize;
         (
-            self.rtvs.as_ref().unwrap()[i].clone(),
-            self.rtv_handles.unwrap()[i],
+            self.textures.as_ref().unwrap()[i].clone(),
+            self.rtvs.unwrap()[i],
         )
     }
 
@@ -49,12 +49,13 @@ impl WindowRenderTarget {
 }
 
 /// Delay starting the main schedule until the swapchain estimates there is 1 frame's worth of time left
-/// before it is able to accept a new frame, reducing overall frame latency.
+/// before it is able to accept a new frame, reducing overall frame latency. Also waits for the command list
+/// to finish executing from last frame.
 ///
 /// It's better to block here, before we read user inputs, update game state, and record rendering commands, rather
 /// than blocking at the end of the frame waiting for the swapchain to become available. This minimizes the latency
 /// between reading user inputs, and submitting the rendered frame to the swapchain.
-pub fn wait_for_ready_swapchain(
+pub fn wait_for_ready_frame(
     window: Query<&WindowRenderTarget, With<PrimaryWindow>>,
     gpu: Res<Gpu>,
 ) {
@@ -155,15 +156,15 @@ fn create_new_swapchain(
             })
     }
     .unwrap();
-    let (rtvs, rtv_handles) = create_rtvs(&gpu.device, &swapchain, &rtv_heap);
+    let (textures, rtvs) = create_rtvs(&gpu.device, &swapchain, &rtv_heap);
 
     // Wrap into a component
     WindowRenderTarget {
         swapchain,
         wait_object,
         rtv_heap,
+        textures: Some(textures),
         rtvs: Some(rtvs),
-        rtv_handles: Some(rtv_handles),
     }
 }
 
@@ -182,9 +183,9 @@ fn resize_swapchain_if_needed(
     // GPU should be idle since we waited on the fence in wait_for_ready_swapchain(),
     // so it's safe to resize the swapchain
 
-    // Drop old RTVs
+    // Drop old textures
+    render_target.textures = None;
     render_target.rtvs = None;
-    render_target.rtv_handles = None;
 
     // Resize swapchain
     unsafe {
@@ -199,13 +200,13 @@ fn resize_swapchain_if_needed(
     .unwrap();
 
     // Recreate RTVs
-    let (rtvs, rtv_handles) = create_rtvs(
+    let (textures, rtvs) = create_rtvs(
         &gpu.device,
         &render_target.swapchain,
         &render_target.rtv_heap,
     );
+    render_target.textures = Some(textures);
     render_target.rtvs = Some(rtvs);
-    render_target.rtv_handles = Some(rtv_handles);
 }
 
 fn create_rtvs(
@@ -216,24 +217,24 @@ fn create_rtvs(
     [ID3D12Resource; SWAPCHAIN_BUFFER_COUNT],
     [D3D12_CPU_DESCRIPTOR_HANDLE; SWAPCHAIN_BUFFER_COUNT],
 ) {
-    let mut rtvs = SmallVec::with_capacity(SWAPCHAIN_BUFFER_COUNT);
-    let mut handles = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); SWAPCHAIN_BUFFER_COUNT];
+    let mut textures = SmallVec::with_capacity(SWAPCHAIN_BUFFER_COUNT);
+    let mut rtvs = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); SWAPCHAIN_BUFFER_COUNT];
 
     let heap_increment =
         unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) } as usize;
-    let mut handle = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+    let mut rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
 
     for i in 0..SWAPCHAIN_BUFFER_COUNT {
-        let rtv = unsafe { swapchain.GetBuffer::<ID3D12Resource>(i as u32) }.unwrap();
-        unsafe { device.CreateRenderTargetView(&rtv, None, handle) };
+        let texture = unsafe { swapchain.GetBuffer::<ID3D12Resource>(i as u32) }.unwrap();
+        unsafe { device.CreateRenderTargetView(&texture, None, rtv) };
 
-        rtvs.push(rtv);
-        handles[i] = handle;
+        textures.push(texture);
+        rtvs[i] = rtv;
 
-        handle.ptr += heap_increment;
+        rtv.ptr += heap_increment;
     }
 
-    (rtvs.into_inner().unwrap(), handles)
+    (textures.into_inner().unwrap(), rtvs)
 }
 
 fn get_hwnd(window_handle: &RawHandleWrapperHolder) -> HWND {

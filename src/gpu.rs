@@ -26,6 +26,7 @@ pub struct Gpu {
     pub factory: IDXGIFactory7,
     pub device: ID3D12Device9,
     pub queue: ID3D12CommandQueue,
+    // TODO: More than 1 frame in flight
     command_allocator: ID3D12CommandAllocator,
     command_list: ID3D12GraphicsCommandList7,
     fence: ID3D12Fence,
@@ -63,6 +64,7 @@ impl Gpu {
             // Debug layer callback
             let info_queue = device.cast::<ID3D12InfoQueue1>()?;
             info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true)?;
+            info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true)?;
             let mut cookie = 0;
             info_queue.RegisterMessageCallback(
                 Some(log_debug_layer_message),
