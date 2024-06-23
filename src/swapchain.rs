@@ -1,5 +1,6 @@
 use crate::gpu::Gpu;
 use bevy::{
+    math::UVec2,
     prelude::{Commands, Component, Entity, Query, Res, ResMut, With},
     window::{PrimaryWindow, RawHandleWrapperHolder, Window, WindowMode},
 };
@@ -8,7 +9,7 @@ use smallvec::SmallVec;
 use windows::{
     core::Interface,
     Win32::{
-        Foundation::{HANDLE, HWND},
+        Foundation::{HANDLE, HWND, RECT},
         Graphics::{
             Direct3D12::*,
             Dxgi::{
@@ -27,6 +28,7 @@ const SWAPCHAIN_BUFFER_COUNT: usize = 2;
 /// Stores a swapchain and other objects necessary for rendering to a [`Window`].
 #[derive(Component)]
 pub struct WindowRenderTarget {
+    size: UVec2,
     swapchain: IDXGISwapChain4,
     wait_object: HANDLE,
     rtv_heap: ID3D12DescriptorHeap,
@@ -35,9 +37,29 @@ pub struct WindowRenderTarget {
 }
 
 impl WindowRenderTarget {
-    pub fn get_rtv(&self) -> (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
+    pub fn rtv(&self) -> (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) {
         let i = unsafe { self.swapchain.GetCurrentBackBufferIndex() } as usize;
         (&self.textures.as_ref().unwrap()[i], self.rtvs.unwrap()[i])
+    }
+
+    pub fn viewport(&self) -> D3D12_VIEWPORT {
+        D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: self.size.x as f32,
+            Height: self.size.y as f32,
+            MinDepth: D3D12_MIN_DEPTH,
+            MaxDepth: D3D12_MAX_DEPTH,
+        }
+    }
+
+    pub fn scissor_rect(&self) -> RECT {
+        RECT {
+            left: 0,
+            top: 0,
+            right: self.size.x as i32,
+            bottom: self.size.y as i32,
+        }
     }
 
     pub fn present(&self) {
@@ -112,6 +134,7 @@ pub fn update_render_target(
     // If there's an existing swapchain, resize if needed, else create a new swapchain
     if let Some(mut render_target) = render_target {
         resize_swapchain_if_needed(&mut render_target, swapchain_desc, &mut gpu);
+        render_target.size = UVec2::new(swapchain_desc.Width, swapchain_desc.Height);
     } else {
         let render_target = create_new_swapchain(&gpu, window_handle, swapchain_desc);
         commands.entity(entity).insert(render_target);
@@ -157,6 +180,7 @@ fn create_new_swapchain(
 
     // Wrap into a component
     WindowRenderTarget {
+        size: UVec2::new(swapchain_desc.Width, swapchain_desc.Height),
         swapchain,
         wait_object,
         rtv_heap,

@@ -50,12 +50,14 @@ fn render_frame(
     let Ok(render_target) = render_target.get_single() else {
         return;
     };
-    let (render_target_texture, render_target_rtv) = render_target.get_rtv();
+    let (render_target_texture, render_target_rtv) = render_target.rtv();
 
     let command_list = gpu.reset_commands(Some(&pipeline.pipeline)).unwrap();
     unsafe {
         // TODO: Enhanced barriers
         command_list.SetGraphicsRootSignature(&pipeline.root_signature);
+        command_list.RSSetViewports(&[render_target.viewport()]);
+        command_list.RSSetScissorRects(&[render_target.scissor_rect()]);
         command_list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
             Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
             Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -110,9 +112,7 @@ fn pipeline_desc(
     desc.SampleMask = u32::MAX;
     desc.RasterizerState = D3D12_RASTERIZER_DESC {
         FillMode: D3D12_FILL_MODE_SOLID,
-        CullMode: D3D12_CULL_MODE_BACK,
-        FrontCounterClockwise: true.into(),
-        DepthClipEnable: true.into(),
+        CullMode: D3D12_CULL_MODE_NONE,
         ..Default::default()
     };
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
