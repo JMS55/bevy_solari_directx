@@ -62,18 +62,20 @@ impl Gpu {
             let device = device.unwrap();
 
             // Debug layer callback
-            let info_queue = device.cast::<ID3D12InfoQueue1>()?;
-            info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true)?;
-            info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true)?;
-            let mut cookie = 0;
-            info_queue.RegisterMessageCallback(
-                Some(log_debug_layer_message),
-                D3D12_MESSAGE_CALLBACK_FLAG_NONE,
-                ptr::null_mut(),
-                &mut cookie,
-            )?;
-            if cookie == 0 {
-                panic!("BevyDirectX: Failed to register debug layer callback");
+            if cfg!(debug_assertions) {
+                let info_queue = device.cast::<ID3D12InfoQueue1>()?;
+                info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true)?;
+                info_queue.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true)?;
+                let mut cookie = 0;
+                info_queue.RegisterMessageCallback(
+                    Some(log_debug_layer_message),
+                    D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+                    ptr::null_mut(),
+                    &mut cookie,
+                )?;
+                if cookie == 0 {
+                    panic!("BevyDirectX: Failed to register debug layer callback");
+                }
             }
 
             // Queue
